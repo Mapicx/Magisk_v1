@@ -1,0 +1,132 @@
+# =========================================================
+# 🌐 GLOBAL / OS / EDITOR
+# =========================================================
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*.orig
+*.bak
+*.tmp
+*.pid
+*.log
+.idea/
+.vscode/
+*.code-workspace
+
+# =========================================================
+# 🐍 PYTHON / FASTAPI BACKEND
+# =========================================================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+.eggs/
+build/
+dist/
+pip-wheel-metadata/
+.tox/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.cache/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+.python-version
+
+# Local logs and runtime outputs
+logs/
+*.log
+*.tmp
+*.pid
+
+# Environment files
+.env
+.env.*
+*.env
+**/.env
+**/.env.*
+
+# Backend generated data
+local_resumes/
+optimized_resumes/
+assets/font_cache/
+tmp/
+temp/
+
+# Any PDFs generated dynamically
+*.pdf
+!README*.pdf   # Keep readme PDFs if you have one
+
+# =========================================================
+# ⚛️ REACT FRONTEND
+# =========================================================
+frontend/node_modules/
+frontend/.pnp/
+frontend/.pnp.js
+frontend/.parcel-cache/
+frontend/dist/
+frontend/build/
+frontend/out/
+frontend/.next/
+frontend/.nuxt/
+frontend/.cache/
+frontend/.vercel/
+frontend/coverage/
+
+# Frontend environment & logs
+frontend/.env
+frontend/.env.*
+frontend/.DS_Store
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+frontend/pnpm-debug.log*
+frontend/package-lock.json
+frontend/.eslintcache
+
+# =========================================================
+# 📦 PACKAGE MANAGERS
+# =========================================================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# =========================================================
+# 🧪 TESTS / COVERAGE
+# =========================================================
+.coverage
+nosetests.xml
+coverage.xml
+test-results/
+*.cover
+*.py,cover
+
+# =========================================================
+# 🧰 MISC (OPTIONAL / SAFE DEFAULTS)
+# =========================================================
+__MACOSX/
+*.db
+*.sqlite3
+*.rdb
+*.db-journal
+
+# =========================================================
+# 🧾 GIT SAFE FILES TO KEEP
+# =========================================================
+!.gitignore
+!README.md
+!package.json
+!requirements.txt
+!Backend/
+!frontend/

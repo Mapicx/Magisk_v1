@@ -1,0 +1,77 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
+All colors MUST be HSL.
+*/
+
+@layer base {
+  :root {
+    --background: 220 15% 6%;
+    --foreground: 220 10% 95%;
+
+    --card: 220 15% 8%;
+    --card-foreground: 220 10% 95%;
+
+    --popover: 220 15% 8%;
+    --popover-foreground: 220 10% 95%;
+
+    --primary: 217 91% 60%;
+    --primary-foreground: 220 10% 95%;
+
+    --secondary: 220 15% 12%;
+    --secondary-foreground: 220 10% 95%;
+
+    --muted: 220 15% 12%;
+    --muted-foreground: 220 10% 60%;
+
+    --accent: 217 91% 60%;
+    --accent-foreground: 220 10% 95%;
+
+    --destructive: 0 63% 50%;
+    --destructive-foreground: 220 10% 95%;
+
+    --border: 220 15% 15%;
+    --input: 220 15% 15%;
+    --ring: 217 91% 60%;
+
+    --radius: 0.5rem;
+
+    --sidebar-background: 220 15% 4%;
+    --sidebar-foreground: 220 10% 70%;
+    --sidebar-primary: 217 91% 60%;
+    --sidebar-primary-foreground: 220 10% 95%;
+    --sidebar-accent: 220 15% 10%;
+    --sidebar-accent-foreground: 220 10% 95%;
+    --sidebar-border: 220 15% 12%;
+    --sidebar-ring: 217 91% 60%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+  }
+
+  /* Custom scrollbar */
+  ::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-background;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-muted rounded-full;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-muted-foreground;
+  }
+}
