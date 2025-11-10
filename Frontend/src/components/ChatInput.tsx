@@ -30,7 +30,15 @@ export const ChatInput = () => {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
 
-      addMessage({ role: 'ai', content: response.data.ai_response });
+      addMessage({
+        role: 'ai',
+        content: response.data.ai_response,
+        meta: {
+          tool_used: response.data.tool_used,
+          tool_trace: response.data.tool_trace,
+          thinking_note: response.data.thinking_note ?? null,
+        },
+      });
     } catch (error: any) {
       console.error('Error:', error);
       toast.error(error.response?.data?.detail || 'Failed to send message');
@@ -54,7 +62,7 @@ export const ChatInput = () => {
             }}
             placeholder="Ask follow-up questions..."
             disabled={isLoading}
-            className="flex-1 p-3 bg-card border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-ring resize-none min-h-[56px] max-h-[200px]"
+            className="flex-1 p-3 bg-card border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-ring resize-none min_h-[56px] max-h-[200px]"
             rows={1}
           />
           <Button

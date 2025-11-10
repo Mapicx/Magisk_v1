@@ -1,67 +1,64 @@
 # Agent/llm/llm_setup.py
 import os
 from dotenv import load_dotenv
+from typing import Any, Dict
 from langchain_google_genai import ChatGoogleGenerativeAI
-
-# Tool imports
-from ..tools.resume_tools import optimize_resume_sections
-from ..tools.websearch import web_search  # NEW
 
 load_dotenv()
 
 def setup_llm() -> ChatGoogleGenerativeAI:
     """
-    Initialize Gemini model with bound tools for ReAct agent.
-    Tools: resume optimization + web search.
+    Return the UNBOUND Gemini model.
+    Tools are bound inside the graph, not here.
     """
-    llm = ChatGoogleGenerativeAI(
+    return ChatGoogleGenerativeAI(
         model="gemini-2.0-flash",
         temperature=0.1,
         streaming=True,
     )
-    # Bind both tools for reasoning-acting flow
-    return llm.bind_tools([optimize_resume_sections, web_search])
 
-def get_system_prompt(state) -> str:
-    """
-    System prompt guiding the model on how to optimize resumes and use tools properly.
-    """
-    resume_text = state.get('resume', 'No resume provided.')
-    jd_text = state.get('job_description', 'No job description provided.')
-    resume_file_path = state.get('resume_file_path', 'No file path provided.')
+def get_system_prompt(state: Dict[str, Any]) -> str:
     resume_file_name = state.get('resume_file_name', 'Unknown file name.')
+    resume_file_path = state.get('resume_file_path', 'No file path provided.')
+    
+    # Check if resume and JD are available
+    has_resume = bool(state.get('resume'))
+    has_jd = bool(state.get('job_description'))
 
-    return f"""
-You are an expert AI agent specializing in ATS-optimized resume writing and career consulting.
-Your task: rewrite and optimize the user's resume for the provided job description.
+    return f"""You are an expert ATS-focused resume optimizer with web search capabilities.
 
-TOOLS AVAILABLE:
-1️⃣ optimize_resume_sections: Generates a PDF resume from Markdown.
-2️⃣ web_search: Searches the web for fresh industry keywords and phrasing.
+AVAILABLE TOOLS:
+1. get_resume_text - Retrieve the uploaded resume
+2. get_job_description - Retrieve the job description
+3. web_search - Search the internet for information (USE THIS for keyword research, industry trends, ATS tips, etc.)
+4. optimize_resume_sections - Generate the final PDF from Markdown
 
-When using optimize_resume_sections:
-- Arguments:
-  • output_path: string (e.g. "optimized_resume.pdf")
-  • optimized_markdown: string (entire resume in Markdown)
-  • name, title, contact_line: strings for the header
-- Use markdown headings (#, ##) for sections
-- Bold skills, metrics, and key terms (**Python**, **90%**, **AWS**)
-- Use bullet points (•) for achievements
-- Keep format ATS-friendly (no tables/images)
-- Separate roles/projects with 2 blank lines
-- Never invent fake experience
+WEB SEARCH CAPABILITIES:
+- You CAN and SHOULD use web_search to find:
+  * ATS-friendly keywords for specific roles/industries
+  * Industry-specific terminology and buzzwords
+  * Current trends in job descriptions
+  * Skills and technologies relevant to the position
+  * Best practices for resume optimization
+- Call web_search with queries like: "ATS keywords for [job title]", "[industry] resume keywords 2025", etc.
+- You can call web_search multiple times if needed for different aspects
+
+WORKFLOW:
+1. If user asks for keyword research or web search: Use web_search tool immediately
+2. For resume optimization: 
+   - Call get_resume_text and get_job_description
+   - Optionally use web_search for additional keywords/insights
+   - Analyze and create optimized Markdown
+   - Call optimize_resume_sections with final Markdown
+
+RULES:
+- Never refuse to use web_search - it's a core capability
+- Never ask user to upload/paste - data is already provided via tools
+- Never fabricate experience or skills
+- Use ATS-safe format: headings (#, ##), bullets (•), bold (**text**)
+- No tables or images, 1-2 pages max
 
 Resume file: {resume_file_name}
-Local path: {resume_file_path}
-
-═══════════════════════════════════════════════════════════════════
-📄 CURRENT RESUME:
-{resume_text}
-
-═══════════════════════════════════════════════════════════════════
-🎯 JOB DESCRIPTION:
-{jd_text}
-
-═══════════════════════════════════════════════════════════════════
-Output only one clean Markdown resume via optimize_resume_sections.
-"""
+Path: {resume_file_path}
+Resume ready: {has_resume}
+JD ready: {has_jd}"""

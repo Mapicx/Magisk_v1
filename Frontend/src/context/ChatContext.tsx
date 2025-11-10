@@ -1,71 +1,72 @@
-import { createContext, useContext, useState, ReactNode } from 'react';
+import React, { createContext, useContext, useState, ReactNode } from 'react';
 
-interface Message {
+export type ToolTraceItem =
+  | { type: 'call'; tool?: string; args?: Record<string, any> }
+  | { type: 'result'; tool?: string; content?: string };
+
+export type ChatMessage = {
   role: 'user' | 'ai';
   content: string;
-  isStreaming?: boolean;
-}
+  meta?: {
+    tool_used?: boolean;
+    tool_trace?: ToolTraceItem[];
+    thinking_note?: string | null;
+  };
+};
 
-interface ChatContextType {
-  threadId: string | null;
-  currentResume: File | null;
-  jobDescription: string;
-  messages: Message[];
-  isLoading: boolean;
-  isStreaming: boolean;
-  resumeText: string;
-  resumeFilePath: string;
-  resumeFileName: string;
-  setThreadId: (id: string | null) => void;
-  setCurrentResume: (file: File | null) => void;
-  setJobDescription: (jd: string) => void;
-  setResumeText: (text: string) => void;
-  setResumeFilePath: (path: string) => void;
-  setResumeFileName: (name: string) => void;
-  addMessage: (message: Message) => void;
-  updateLastMessage: (content: string) => void;
-  setMessages: (messages: Message[]) => void;
-  setIsLoading: (loading: boolean) => void;
-  setIsStreaming: (streaming: boolean) => void;
+type ChatContextType = {
+  messages: ChatMessage[];
+  addMessage: (m: ChatMessage) => void;
   resetChat: () => void;
-}
+
+  threadId: string | null;
+  setThreadId: (v: string | null) => void;
+
+  currentResume: File | null;
+  setCurrentResume: (f: File | null) => void;
+
+  jobDescription: string;
+  setJobDescription: (v: string) => void;
+
+  isLoading: boolean;
+  setIsLoading: (v: boolean) => void;
+};
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
 
 export const ChatProvider = ({ children }: { children: ReactNode }) => {
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [threadId, setThreadId] = useState<string | null>(null);
   const [currentResume, setCurrentResume] = useState<File | null>(null);
   const [jobDescription, setJobDescription] = useState<string>('');
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState<boolean>(false);
 
-  const addMessage = (message: Message) => {
-    setMessages(prev => [...prev, message]);
+  const addMessage = (m: ChatMessage) => {
+    setMessages((prev) => [...prev, m]);
   };
 
   const resetChat = () => {
+    setMessages([]);
     setThreadId(null);
     setCurrentResume(null);
     setJobDescription('');
-    setMessages([]);
     setIsLoading(false);
   };
 
   return (
     <ChatContext.Provider
       value={{
-        threadId,
-        currentResume,
-        jobDescription,
         messages,
-        isLoading,
-        setThreadId,
-        setCurrentResume,
-        setJobDescription,
         addMessage,
-        setMessages,
-        setIsLoading,
         resetChat,
+        threadId,
+        setThreadId,
+        currentResume,
+        setCurrentResume,
+        jobDescription,
+        setJobDescription,
+        isLoading,
+        setIsLoading,
       }}
     >
       {children}
@@ -74,9 +75,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
 };
 
 export const useChatContext = () => {
-  const context = useContext(ChatContext);
-  if (!context) {
-    throw new Error('useChatContext must be used within ChatProvider');
-  }
-  return context;
+  const ctx = useContext(ChatContext);
+  if (!ctx) throw new Error('useChatContext must be used within ChatProvider');
+  return ctx;
 };

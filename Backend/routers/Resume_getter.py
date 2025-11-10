@@ -1,295 +1,328 @@
 # Backend/routers/Resume_getter.py
-from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
-from supabase import create_client, Client
-from Backend import models, database
-from sqlalchemy.orm import Session
-from dotenv import load_dotenv
-import fitz
-from langchain_core.messages import HumanMessage
-import uuid, os, sys
-from pathlib import Path
+from __future__ import annotations
 import io
-import logging
+import json
+import os
+import re
+import uuid
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple, Union
 
-# Create router logger
-router_logger = logging.getLogger("Resume_Router")
-router_logger.setLevel(logging.INFO)
+import fitz  # PyMuPDF
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
-# ---------- SETUP ABSOLUTE IMPORTS ----------
-project_root = Path(__file__).parent.parent.parent
-sys.path.insert(0, str(project_root))
+# --- Adjust these imports to match your project structure ---
+from Agent.graph.graph_setup import build_graph
+from Agent.utils.logging_utils import log_llm_operation
 
-try:
-    from Agent.graph.graph_setup import setup_graph
-    from Agent.tools.pdf_tools import optimize_resume_sections
-    from Agent.utils.logging_utils import log_llm_operation
-    from Agent.models.chat_state import ChatState
-except ImportError as e:
-    router_logger.error(f"Import error: {e}")
-    raise
+# If you use ORM/DB, re-add your real imports here (kept minimal for clarity)
+# from Backend import models, database
+# from sqlalchemy.orm import Session
+# from fastapi import Depends
 
-router = APIRouter(tags=["Resume Optimization"])
+# -----------------------------------------------------------
+# Setup
+# -----------------------------------------------------------
+router = APIRouter(tags=["Resume Optimizer"])
 
-# ---------- SETUP ----------
-load_dotenv(project_root / ".env")
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+OPTIMIZED_DIR = PROJECT_ROOT / "optimized_resumes"
+OPTIMIZED_DIR.mkdir(exist_ok=True)
 
-if not SUPABASE_URL or not SUPABASE_KEY:
-    raise Exception("Missing Supabase credentials in .env")
-
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-LOCAL_RESUMES_DIR = project_root / "local_resumes"
-LOCAL_RESUMES_DIR.mkdir(exist_ok=True)
-OPTIMIZED_RESUMES_DIR = project_root / "optimized_resumes"
-OPTIMIZED_RESUMES_DIR.mkdir(exist_ok=True)
-
-# Use the new hybrid tool
-tools = [optimize_resume_sections]
-chatbot = setup_graph()
-
-router_logger.info("Resume router initialized successfully")
+# compile graph once
+chatbot = build_graph()
 
 
-# ---------- MAIN ROUTE ----------
+# -----------------------------------------------------------
+# Helpers
+# -----------------------------------------------------------
+def _now_iso() -> str:
+    return datetime.utcnow().isoformat() + "Z"
+
+
+def _safe_str(x: Any, maxlen: int = 1200) -> str:
+    try:
+        s = x if isinstance(x, str) else json.dumps(x, ensure_ascii=False)
+    except Exception:
+        s = str(x)
+    if len(s) > maxlen:
+        s = s[:maxlen] + "…"
+    return s
+
+
+# redact some heavy fields so UI stays readable
+REDACT_KEYS = {
+    "optimized_markdown",
+    "raw_html",
+    "page_html",
+    "content_blob",
+    "raw_text",
+    "html",
+    "markdown",
+}
+
+
+
+def _sanitize_args(args: Any) -> Any:
+    """
+    Remove / shrink huge fields from tool call args so the frontend collapsible
+    doesn't get spammed with megabytes of text.
+    """
+    if isinstance(args, dict):
+        out = {}
+        for k, v in args.items():
+            if k in REDACT_KEYS:
+                out[k] = "[[omitted large text]]"
+            elif isinstance(v, str) and len(v) > 800:
+                out[k] = _safe_str(v, 400)
+            else:
+                out[k] = v
+        return out
+    return args
+
+
+def _result_to_messages(result: Any) -> List[Any]:
+    """
+    Normalize LangGraph result to a list of messages.
+    Handles both:
+      - dict with {"messages": [...]}
+      - a raw list of messages
+    """
+    if isinstance(result, dict) and "messages" in result:
+        msgs = result["messages"]
+        if isinstance(msgs, list):
+            return msgs
+        # Sometimes libs return tuples/etc.
+        return list(msgs)
+    if isinstance(result, list):
+        return result
+    # last resort: wrap as a single assistant message
+    return [AIMessage(content=_safe_str(result))]
+
+
+def _expand_tool_result_content(content: Any) -> List[Dict[str, Any]]:
+    """
+    Expand a tool's return content into UI-friendly entries.
+    If it contains {"_trace":[...]}, we expand that as the readable timeline.
+    Otherwise, we add one 'note' entry with a compact preview.
+    """
+    entries: List[Dict[str, Any]] = []
+    parsed = None
+
+    if isinstance(content, (dict, list)):
+        parsed = content
+    elif isinstance(content, str):
+        try:
+            parsed = json.loads(content)
+        except Exception:
+            parsed = None
+
+    if isinstance(parsed, dict) and isinstance(parsed.get("_trace"), list):
+        for item in parsed["_trace"]:
+            if isinstance(item, dict):
+                entries.append(
+                    {
+                        "type": item.get("type", "note"),
+                        "at": item.get("at", _now_iso()),
+                        **{k: v for k, v in item.items() if k not in {"type", "at"}},
+                    }
+                )
+        # helpful summaries
+        if isinstance(parsed.get("results"), list):
+            entries.append(
+                {
+                    "type": "note",
+                    "at": _now_iso(),
+                    "text": f"{len(parsed['results'])} search results gathered.",
+                }
+            )
+        if "output_path" in parsed:
+            entries.append({"type": "file", "at": _now_iso(), "file": parsed["output_path"]})
+    else:
+        # fallback: compact preview
+        entries.append({"type": "note", "at": _now_iso(), "text": _safe_str(content, 700)})
+
+    return entries
+
+
+def _build_tool_trace_and_response(messages: List[Any]) -> Tuple[str, bool, List[Dict[str, Any]], Optional[str]]:
+    """
+    Walk the entire message list to:
+      - produce a 'tool_trace' timeline
+      - determine 'tool_used'
+      - pick the final assistant content
+      - build a short, safe 'thinking_note'
+    """
+    tool_trace: List[Dict[str, Any]] = []
+    tool_used = False
+    ai_response = ""
+
+    # Forward pass: capture tool calls + tool results
+    for m in messages:
+        # Tool calls from AIMessage
+        if isinstance(m, AIMessage) and getattr(m, "tool_calls", None):
+            for tc in m.tool_calls:
+                tool_trace.append(
+                    {
+                        "type": "call",
+                        "at": _now_iso(),
+                        "tool": tc.get("name"),
+                        "args": _sanitize_args(tc.get("args", {})),
+                    }
+                )
+            tool_used = True
+
+        # Tool results (ToolMessage)
+        if isinstance(m, ToolMessage) or getattr(m, "name", None) or getattr(m, "tool_call_id", None):
+            name = getattr(m, "name", None)
+            content = getattr(m, "content", "")
+            expanded = _expand_tool_result_content(content)
+            for e in expanded:
+                tool_trace.append({"type": "result", "at": _now_iso(), "tool": name, **e})
+            tool_used = True
+
+    # Backward pass: pick last contentful assistant message as final text
+    for m in reversed(messages):
+        # prefer AIMessage content
+        if isinstance(m, AIMessage) and getattr(m, "content", None):
+            ai_response = m.content
+            break
+        # fallback to any message with 'content'
+        if getattr(m, "content", None):
+            ai_response = m.content
+            break
+
+    # compact, safe thinking note
+    thinking_note = None
+    tools = [x.get("tool") for x in tool_trace if x.get("type") == "call" and x.get("tool")]
+    if tools:
+        uniq: List[str] = []
+        for t in tools:
+            if t not in uniq:
+                uniq.append(t)
+        thinking_note = f"Used tools: {', '.join(uniq)}"
+
+    return ai_response, tool_used, tool_trace, thinking_note
+# -----------------------------------------------------------
+
+
 @router.post("/optimize_resume")
 async def optimize_resume(
     file: UploadFile = File(...),
     job_description: str = Form(...),
     user_message: str = Form(...),
-    thread_id: str = Form(None),
-    db: Session = Depends(database.get_db)
+    thread_id: Optional[str] = Form(None),
+    # db: Session = Depends(database.get_db),  # re-enable if you use a DB here
 ):
-    """Main endpoint for resume optimization"""
-    
-    router_logger.info(f"Optimize resume endpoint called - File: {file.filename}, Thread: {thread_id or 'NEW'}")
-    
-    # Step 1: Validate file
-    if not file.filename or not file.filename.endswith(".pdf"):
-        router_logger.error("Validation failed: Not a PDF file")
+    """
+    Main endpoint: extracts text, invokes the agent graph, returns AI reply + tool timeline.
+    """
+
+    # ---- 1) Validate + read PDF
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are allowed.")
+    raw = await file.read()
+    log_llm_operation(
+        "REQUEST_RECEIVED",
+        {"endpoint": "/optimize_resume", "filename": file.filename, "bytes": len(raw), "thread_id": thread_id or "NEW"},
+    )
 
-    # Step 2: Read file bytes
-    try:
-        file_bytes = await file.read()
-        router_logger.info(f"File read successfully: {len(file_bytes)} bytes")
-    except Exception as e:
-        router_logger.error(f"Failed to read file: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to read file: {str(e)}")
-
-    # Step 3: Upload to Supabase and save locally
-    unique_name = f"resumes/{uuid.uuid4()}_{file.filename}"
-    
-    try:
-        supabase.storage.from_("resumes").upload(unique_name, file_bytes)
-        router_logger.info(f"File uploaded to Supabase: {unique_name}")
-    except Exception as e:
-        router_logger.error(f"Supabase upload failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
-
-    public_url = supabase.storage.from_("resumes").get_public_url(unique_name)
-
-    local_file_path = LOCAL_RESUMES_DIR / f"{uuid.uuid4()}_{file.filename}"
-    try:
-        with open(local_file_path, "wb") as f:
-            f.write(file_bytes)
-        log_llm_operation("RESUME_SAVED_LOCALLY", {
-            "file_path": str(local_file_path),
-            "file_size": len(file_bytes),
-            "thread_id": thread_id or "new_session"
-        })
-    except Exception as e:
-        router_logger.error(f"Local file save failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Local file save failed: {str(e)}")
-
-    # Step 4: Extract text from PDF
+    # ---- 2) Extract text
     try:
         resume_text = ""
-        file_buffer = io.BytesIO(file_bytes)
-        with fitz.open(stream=file_buffer, filetype="pdf") as doc:
-            page_count = doc.page_count
+        with fitz.open(stream=io.BytesIO(raw), filetype="pdf") as doc:
+            pages = doc.page_count
             for page in doc:
-                resume_text += page.get_text() # type: ignore
+                resume_text += page.get_text()  # type: ignore
         resume_text = resume_text.strip()
-        
-        log_llm_operation("RESUME_TEXT_EXTRACTED", {
-            "text_length": len(resume_text),
-            "pages": page_count,
-            "thread_id": thread_id or "new_session"
-        })
-
+        log_llm_operation(
+            "RESUME_TEXT_EXTRACTED",
+            {"pages": pages, "text_len": len(resume_text), "thread_id": thread_id or "NEW"},
+        )
     except Exception as e:
-        router_logger.error(f"Text extraction failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Text extraction failed: {str(e)}")
+        log_llm_operation("RESUME_TEXT_EXTRACT_ERROR", {"error": str(e)}, success=False)
+        raise HTTPException(status_code=500, detail=f"Text extraction failed: {e}")
 
-    # Step 5: Save to database
-    resume_entry = models.Resume(filename=unique_name, file_url=public_url) # type: ignore
-    db.add(resume_entry)
-    db.commit()
-    db.refresh(resume_entry)
-    router_logger.info(f"Resume saved to database with ID: {resume_entry.id}")
+    # ---- 3) (Optional) DB save (restore your original code if you used ORM)
+    # resume_entry = models.Resume(filename=file.filename, file_url="...")  # type: ignore
+    # db.add(resume_entry); db.commit(); db.refresh(resume_entry)
+    # log_llm_operation("DB_SAVE_OK", {"resume_id": resume_entry.id})
 
-    # Step 6: LLM Processing
-    try:
-        config_thread_id = thread_id or str(uuid.uuid4())
-        config = {"configurable": {"thread_id": config_thread_id}}
-        session_type = "existing_session" if thread_id else "new_session"
-
-        inputs = {
-            "messages": [HumanMessage(content=user_message)],
-            "resume": resume_text,
-            "job_description": job_description,
-            "resume_file_path": str(local_file_path),
-            "resume_file_name": file.filename
-        }
-
-        log_llm_operation("CHATBOT_INVOCATION_START", {
-            "thread_id": config_thread_id,
-            "session_type": session_type,
-            "user_message_length": len(user_message),
-            "resume_length": len(resume_text),
-            "jd_length": len(job_description)
-        })
-
-        result = chatbot.invoke(inputs, config=config) # type: ignore
-
-        ai_response = ""
-        tool_used = False
-        
-        # Parse LLM response
-        for message in reversed(result["messages"]):
-            if hasattr(message, "content") and message.content:
-                ai_response = message.content
-                if (hasattr(message, "tool_calls") and message.tool_calls) or \
-                   (hasattr(message, "tool_call_id") and message.tool_call_id):
-                    tool_used = True
-                break
-
-        # Log the complete AI response
-        log_llm_operation("LLM_RESPONSE_COMPLETE", {
-            "thread_id": config_thread_id,
-            "session_type": session_type,
-            "ai_response": ai_response,  # Full response logged
-            "ai_response_length": len(ai_response),
-            "tool_used": tool_used,
-            "total_messages": len(result["messages"])
-        })
-
-    except Exception as e:
-        log_llm_operation("CHATBOT_INVOCATION_ERROR", {
-            "error": str(e),
-            "thread_id": config_thread_id if 'config_thread_id' in locals() else "unknown", # type: ignore
-            "session_type": session_type if 'session_type' in locals() else "unknown" # type: ignore
-        }, success=False)
-        raise HTTPException(status_code=500, detail=f"AI processing failed: {str(e)}")
-
-    # Step 7: Build response
-    response_data = {
-        "thread_id": config_thread_id,
-        "session_type": session_type,
-        "resume_id": resume_entry.id,
-        "file_url": resume_entry.file_url,
-        "local_file_path": str(local_file_path),
-        "extracted_resume_text": resume_text[:500] + "..." if len(resume_text) > 500 else resume_text,
+    # ---- 4) Invoke graph
+    config_thread_id = thread_id or str(uuid.uuid4())
+    config = {
+        "configurable": {"thread_id": config_thread_id},
+        "recursion_limit": 50  # Allow enough iterations for tool calls
+    }
+    inputs = {
+        "messages": [HumanMessage(content=user_message)],
+        "resume": resume_text,
         "job_description": job_description,
-        "user_message": user_message,
-        "ai_response": ai_response,
-        "tool_used": tool_used
+        "resume_file_name": file.filename,
     }
 
-    # Check for optimized resume path
-    if tool_used and "saved at:" in ai_response.lower():
-        import re
-        path_match = re.search(r"saved at:\s*(.+\.pdf)", ai_response, re.IGNORECASE)
-        if path_match:
-            optimized_path = path_match.group(1)
-            response_data["optimized_resume_path"] = optimized_path
-            if Path(optimized_path).exists():
-                response_data["optimized_file_exists"] = True
-                response_data["optimized_file_name"] = Path(optimized_path).name
-                router_logger.info(f"Optimized resume created: {Path(optimized_path).name}")
+    log_llm_operation(
+        "CHATBOT_INVOCATION_START",
+        {
+            "thread_id": config_thread_id,
+            "has_thread": bool(thread_id),
+            "user_message_len": len(user_message),
+            "resume_len": len(resume_text),
+            "jd_len": len(job_description),
+        },
+    )
 
-    router_logger.info(f"Request completed successfully - Thread: {config_thread_id}")
-    
-    return response_data
-
-
-# ---------- SESSION MANAGEMENT ROUTES ----------
-@router.get("/session_info/{thread_id}")
-async def get_session_info(thread_id: str):
-    """Get information about a session thread"""
-    router_logger.info(f"Session info requested for thread: {thread_id}")
     try:
-        session_exists = True
-        return {
-            "thread_id": thread_id,
-            "session_exists": session_exists,
-            "message": "Session tracking is basic. For production, consider using a persistent checkpointer."
-        }
+        result = chatbot.invoke(inputs, config=config)  # shape: dict(messages=[...]) OR just [...]
     except Exception as e:
-        router_logger.error(f"Error checking session: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error checking session: {str(e)}")
+        log_llm_operation(
+            "CHATBOT_INVOCATION_ERROR",
+            {"thread_id": config_thread_id, "error": str(e)},
+            success=False,
+        )
+        raise HTTPException(status_code=500, detail=f"AI processing failed: {e}")
 
+    # ---- 5) Normalize + parse
+    messages = _result_to_messages(result)
+    ai_response, tool_used, tool_trace, thinking_note = _build_tool_trace_and_response(messages)
 
-@router.post("/new_session")
-async def create_new_session():
-    """Explicitly create a new session and return the thread_id"""
-    new_thread_id = str(uuid.uuid4())
-    
-    log_llm_operation("NEW_SESSION_CREATED", {
-        "thread_id": new_thread_id
-    })
-    
+    log_llm_operation(
+        "LLM_RESPONSE_COMPLETE",
+        {
+            "thread_id": config_thread_id,
+            "ai_response_len": len(ai_response or ""),
+            "tool_used": tool_used,
+            "total_messages": len(messages),
+        },
+    )
+
+    # ---- 6) Try to capture a filename from the AI text (for your current download button)
+    optimized_file_name = None
+    m = re.search(r"([^\s/]+_optimized_[^\s/]+\.pdf)", (ai_response or ""), re.IGNORECASE)
+    if m:
+        optimized_file_name = m.group(1)
+
+    # ---- 7) Build response
     return {
-        "thread_id": new_thread_id,
-        "message": "New session created successfully"
+        "thread_id": config_thread_id,
+        "ai_response": ai_response,
+        "tool_used": tool_used,
+        "tool_trace": tool_trace,
+        "thinking_note": thinking_note,
+        "optimized_file_name": optimized_file_name,
+        "optimized_file_exists": bool(optimized_file_name and (OPTIMIZED_DIR / optimized_file_name).exists()),
     }
-
-
-# ---------- OTHER ROUTES ----------
-@router.get("/optimized_resumes")
-async def list_optimized_resumes():
-    """List all optimized resumes"""
-    router_logger.info("Listing optimized resumes")
-    try:
-        optimized_files = []
-        for file_path in OPTIMIZED_RESUMES_DIR.glob("*.pdf"):
-            optimized_files.append({
-                "filename": file_path.name,
-                "file_path": str(file_path),
-                "size": file_path.stat().st_size,
-                "created": file_path.stat().st_ctime
-            })
-
-        router_logger.info(f"Found {len(optimized_files)} optimized resumes")
-        return {
-            "optimized_resumes": optimized_files,
-            "total_count": len(optimized_files)
-        }
-    except Exception as e:
-        router_logger.error(f"Error listing optimized resumes: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error listing optimized resumes: {str(e)}")
 
 
 @router.get("/download_optimized/{filename}")
-async def download_optimized_resume(filename: str):
-    """Download an optimized resume"""
-    router_logger.info(f"Download requested: {filename}")
-    try:
-        file_path = OPTIMIZED_RESUMES_DIR / filename
-
-        if not file_path.exists():
-            router_logger.error(f"File not found: {filename}")
-            raise HTTPException(status_code=404, detail="File not found")
-
-        router_logger.info(f"Serving file: {filename}")
-        from fastapi.responses import FileResponse
-        return FileResponse(
-            path=file_path,
-            filename=filename,
-            media_type="application/pdf"
-        )
-    except Exception as e:
-        router_logger.error(f"Error downloading file: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error downloading file: {str(e)}")
+def download_optimized(filename: str):
+    """
+    Serve an optimized resume by filename (must exist in OPTIMIZED_DIR).
+    """
+    path = OPTIMIZED_DIR / filename
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(str(path), filename=filename, media_type="application/pdf")

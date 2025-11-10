@@ -34,8 +34,20 @@ export const InitialForm = () => {
       setThreadId(response.data.thread_id);
       setCurrentResume(resumeFile);
       setJobDescription(jdText);
+
+      // Push user message first
       addMessage({ role: 'user', content: userMessage });
-      addMessage({ role: 'ai', content: response.data.ai_response });
+
+      // Push AI message with meta (thinking/tools)
+      addMessage({
+        role: 'ai',
+        content: response.data.ai_response,
+        meta: {
+          tool_used: response.data.tool_used,
+          tool_trace: response.data.tool_trace,
+          thinking_note: response.data.thinking_note ?? null,
+        },
+      });
 
       toast.success('Resume optimization started!');
     } catch (error: any) {
