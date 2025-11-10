@@ -10,6 +10,17 @@ import os
 # Get or create logger
 logger = logging.getLogger("LLM_Operations")
 
+def log_event(source: str, message: str):
+    """
+    Simple unified logger for agent events.
+    Appends timestamped logs to ./agent_logs/runtime.log
+    """
+    timestamp = datetime.now().isoformat()
+    log_dir = "./agent_logs"
+    os.makedirs(log_dir, exist_ok=True)
+    with open(os.path.join(log_dir, "runtime.log"), "a", encoding="utf-8") as f:
+        f.write(f"[{timestamp}] [{source}] {message}\n")
+
 # Only configure if not already configured
 if not logger.handlers:
     logger.setLevel(logging.INFO)
