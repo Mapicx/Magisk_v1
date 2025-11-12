@@ -215,6 +215,9 @@ async def optimize_resume(
     job_description: str = Form(...),
     user_message: str = Form(...),
     thread_id: Optional[str] = Form(None),
+    linkedin_url: Optional[str] = Form(None),
+    github_url: Optional[str] = Form(None),
+    leetcode_url: Optional[str] = Form(None),
     # db: Session = Depends(database.get_db),  # re-enable if you use a DB here
 ):
     """
@@ -247,7 +250,13 @@ async def optimize_resume(
         raise HTTPException(status_code=500, detail=f"Text extraction failed: {e}")
 
     # ---- 3) (Optional) DB save (restore your original code if you used ORM)
-    # resume_entry = models.Resume(filename=file.filename, file_url="...")  # type: ignore
+    # resume_entry = models.Resume(
+    #     filename=file.filename, 
+    #     file_url="...",
+    #     linkedin_url=linkedin_url,
+    #     github_url=github_url,
+    #     leetcode_url=leetcode_url
+    # )  # type: ignore
     # db.add(resume_entry); db.commit(); db.refresh(resume_entry)
     # log_llm_operation("DB_SAVE_OK", {"resume_id": resume_entry.id})
 
@@ -262,6 +271,9 @@ async def optimize_resume(
         "resume": resume_text,
         "job_description": job_description,
         "resume_file_name": file.filename,
+        "linkedin_url": linkedin_url or "",
+        "github_url": github_url or "",
+        "leetcode_url": leetcode_url or "",
     }
 
     log_llm_operation(

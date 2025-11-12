@@ -3,7 +3,8 @@ import { ChatPane } from '@/components/ChatPane';
 
 const Index = () => {
   return (
-    <div className="flex w-full h-screen overflow-hidden">
+    // Use min-h-screen and remove overflow-hidden so inner scroll containers can work correctly.
+    <div className="flex w-full min-h-screen">
       <Sidebar />
       <ChatPane />
     </div>

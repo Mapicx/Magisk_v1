@@ -112,7 +112,8 @@ CONTACT_STYLE = ParagraphStyle(
     fontSize=9,
     leading=11.5,
     textColor=colors.HexColor('#555555'),
-    spaceAfter=6
+    spaceAfter=6,
+    linkUnderline=True
 )
 
 SECTION_HEADER_STYLE = ParagraphStyle(
@@ -195,11 +196,36 @@ def process_text_formatting(text: Optional[str]) -> str:
     if not text: return ""
     text = re.sub(r'^[\u2022\-\*]\s+', '• ', text, flags=re.MULTILINE)  # normalize bullets
     text = re.sub(r'\*\*([^\*]+)\*\*', r'<b>\1</b>', text)              # markdown bold
-    # protect <b> tags then escape
-    text = text.replace('<b>', '[[[B]]]').replace('</b>', '[[[/B]]]').replace('<br/>', '[[[BR]]]')
+    
+    # Convert "Label: URL" patterns to clickable labels (e.g., "LinkedIn: https://..." -> clickable "LinkedIn")
+    # This handles patterns like "LinkedIn: URL", "GitHub: URL", "LeetCode: URL", etc.
+    label_url_pattern = r'(LinkedIn|Github|GitHub|LeetCode|Leetcode|Portfolio|Website|Email):\s*(https?://[^\s<>"{}|\\^`\[\]]+|www\.[^\s<>"{}|\\^`\[\]]+|[^\s<>"{}|\\^`\[\]]+@[^\s<>"{}|\\^`\[\]]+)'
+    text = re.sub(label_url_pattern, lambda m: f'<a href="{m.group(2)}" color="blue">{m.group(1)}</a>', text, flags=re.IGNORECASE)
+    
+    # Convert standalone URLs to clickable links (for URLs not preceded by a label)
+    # NOTE: ReportLab uses <a href="..."> tags, NOT <link> tags
+    # Match URLs that are NOT already inside <a> tags
+    standalone_url_pattern = r'(?<!href=")(https?://[^\s<>"{}|\\^`\[\]]+|www\.[^\s<>"{}|\\^`\[\]]+)(?!</a>)'
+    def replace_standalone_url(match):
+        url = match.group(1)
+        # Don't replace if it's already part of an <a> tag
+        return f'<a href="{url}" color="blue">{url}</a>'
+    text = re.sub(standalone_url_pattern, replace_standalone_url, text)
+    
+    # protect <b> tags, <br/> tags, and <a> tags (including full opening tag) then escape
+    text = text.replace('<b>', '[[[B]]]').replace('</b>', '[[[/B]]]')
+    text = text.replace('<br/>', '[[[BR]]]')
+    # Protect entire <a ...> opening tag (not just '<a ')
+    text = re.sub(r'<a ([^>]+)>', r'[[[A \1]]]', text)
+    text = text.replace('</a>', '[[[/A]]]')
     text = re.sub(r'&(?![a-zA-Z]+;|#\d+;)', '&amp;', text)
     text = text.replace('<', '&lt;').replace('>', '&gt;')
-    return text.replace('[[[B]]]', '<b>').replace('[[[/B]]]', '</b>').replace('[[[BR]]]', '<br/>')
+    text = text.replace('[[[B]]]', '<b>').replace('[[[/B]]]', '</b>')
+    text = text.replace('[[[BR]]]', '<br/>')
+    # Restore <a ...> opening tag
+    text = re.sub(r'\[\[\[A ([^\]]+)\]\]\]', r'<a \1>', text)
+    text = text.replace('[[[/A]]]', '</a>')
+    return text
 
 # -----------------------------
 # Page deco

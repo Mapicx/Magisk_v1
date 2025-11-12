@@ -23,6 +23,9 @@ class AgentState(TypedDict):
     job_description: str
     resume_file_name: str
     resume_file_path: str
+    linkedin_url: str
+    github_url: str
+    leetcode_url: str
 
 
 def _ensure_messages(state_messages: Any) -> List[Any]:

@@ -75,3 +75,14 @@ All colors MUST be HSL.
     @apply bg-muted-foreground;
   }
 }
+
+/* Ensure flex layouts that use h-screen/min-h-screen can size correctly */
+html, body, #root {
+  height: 100%;
+  overscroll-behavior-y: auto;
+}
+
+/* Optional: allow native scrolling fallback */
+body {
+  -webkit-overflow-scrolling: touch;
+}

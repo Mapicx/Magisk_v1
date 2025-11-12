@@ -10,7 +10,8 @@ export const ChatMessages = () => {
   const [open, setOpen] = useState<Record<number, boolean>>({});
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    // ensure the container scrolls to bottom when messages change
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages]);
 
   const extractDownloadFilename = (content: string): string | null => {
@@ -37,7 +38,8 @@ export const ChatMessages = () => {
   };
 
   return (
-    <div className="flex-1 overflow-y-auto px-4 py-8">
+    // ensure this container takes available height and provides an internal scroll
+    <div className="flex-1 h-full overflow-y-auto px-4 py-8">
       <div className="max-w-3xl mx-auto space-y-6">
         {messages.map((message, index) => (
           <div
